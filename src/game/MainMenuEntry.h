@@ -8,4 +8,7 @@ namespace MainMenuEntry
 {
 	// At plugin load: hooks the main and pause menus' updates (their classes' vtables, by the address library).
 	void Install();
+
+	// Main thread: opens the multiplayer menu beside the main panel, or where it usually is if no menu has been seen.
+	void OpenPanel();
 }

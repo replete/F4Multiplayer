@@ -2,6 +2,7 @@
 
 #include "MainThread.h"
 #include "Text.h"
+#include "game/KeyNames.h"
 #include "game/Menu.h"
 
 #include <algorithm>
@@ -9,6 +10,8 @@
 #include <format>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,14 +24,6 @@ namespace MPMenu
 		constexpr const char* NAME = "F4MPMenu";
 		constexpr const char* MOVIE = "Interface/F4Multiplayer/MPMenu.swf";
 
-		// On: drawn as the game draws its menus, white in the movie and tinted with the player's HUD color by the renderer
-		// through shader targets on the movie's layers (FlatScreenModel, kCustomRendering; the main menu's own targets are
-		// color 3, kPlayerSetColor, and for its panel backgrounds color 0 with a shaded background of 2). The tint works,
-		// but through that renderer the panel's translucent ground comes out opaque, and the game's shaded background on a
-		// layer of ours drew nothing (white, or black with the no-color filter). Off, as now: the movie draws in the same
-		// HUD color itself, and its ground is translucent.
-		constexpr bool SHADED = false;
-
 		// The movie's calls into us (BGSCodeObj in MPMenu.as), by the ID each is mapped with.
 		enum class Code : std::uintptr_t
 		{
@@ -38,8 +33,24 @@ namespace MPMenu
 			kLog,
 		};
 
-		// The entries, in the movie's order. Each opens the F1 pages for now.
-		constexpr std::array<const char*, 4> ENTRIES{ "mpmenu.host", "mpmenu.join", "mpmenu.direct", "mpmenu.options" };
+		// The page to draw: set on the main thread, taken in the menu's own update.
+		struct Page
+		{
+			std::uint32_t            serial = 0;
+			std::string              body;
+			std::vector<std::string> rows;
+			std::vector<std::string> hints;
+			bool                     keepRow = false;
+			bool                     heading = false;
+		};
+		std::mutex          pageLock;
+		std::optional<Page> nextPage;  // under pageLock
+
+		// Opened and not closed since. A menu going away counts only if it is the latest opened: one being hidden can
+		// go after the next has been asked for.
+		std::atomic<bool>          wanted{ false };
+		std::atomic<std::uint32_t> opened{ 0 };
+		std::atomic<bool>          capturing{ false };  // the next key is a keybind's
 
 		// The main menu's panel box on the stage: set on the main thread before the show message, read as the menu is made.
 		std::atomic<float> boxLeft{ 0.0f };
@@ -65,6 +76,14 @@ namespace MPMenu
 			return color;
 		}
 
+		std::uint32_t NumberOf(const GValue& a_value)
+		{
+			return a_value.IsUInt() ? a_value.GetUInt() :
+			       a_value.IsInt()  ? static_cast<std::uint32_t>(a_value.GetInt()) :
+			       a_value.IsNumber() ? static_cast<std::uint32_t>(a_value.GetNumber()) :
+			                            0;
+		}
+
 		void Hide()
 		{
 			if (const auto queue = RE::UIMessageQueue::GetSingleton()) {
@@ -83,18 +102,13 @@ namespace MPMenu
 				switch (static_cast<Code>(reinterpret_cast<std::uintptr_t>(a_params.userData))) {
 				case Code::kPressed:
 					{
-						const auto index = a_params.argCount > 0 && a_params.args[0].IsNumber() ? static_cast<int>(a_params.args[0].GetNumber()) :
-						                   a_params.argCount > 0 && a_params.args[0].IsInt()    ? a_params.args[0].GetInt() :
-						                                                                          -1;
-						REX::INFO("MPMenu: entry {} pressed", index);
-						MainThread::Post([] {
-							Hide();
-							Menu::Open();
-						});
+						if (a_params.argCount > 1) {
+							Menu::PanelPress(NumberOf(a_params.args[0]), NumberOf(a_params.args[1]));
+						}
 					}
 					break;
 				case Code::kClose:
-					MainThread::Post([] { Hide(); });
+					MainThread::Post([] { Menu::PanelBack(); });
 					break;
 				case Code::kPlaySound:
 					if (a_params.argCount > 0 && a_params.args[0].IsString()) {
@@ -114,27 +128,59 @@ namespace MPMenu
 		class Panel final : public RE::GameMenuBase
 		{
 		public:
-			Panel()
+			Panel() :
+				number(opened.load())
 			{
 				menuFlags.set(RE::UI_MENU_FLAGS::kPausesGame, RE::UI_MENU_FLAGS::kUsesCursor, RE::UI_MENU_FLAGS::kUsesMenuContext,
 					RE::UI_MENU_FLAGS::kModal, RE::UI_MENU_FLAGS::kDisablePauseMenu, RE::UI_MENU_FLAGS::kUpdateUsesCursor);
-				if constexpr (SHADED) {
-					menuFlags.set(RE::UI_MENU_FLAGS::kCustomRendering);  // through GameMenuBase's renderer, FlatScreenModel
-				}
+				// Through GameMenuBase's renderer, FlatScreenModel, as the game's menus, cursor and message boxes are drawn. A menu
+				// that isn't draws in a later pass, over all of them.
+				menuFlags.set(RE::UI_MENU_FLAGS::kCustomRendering);
 				// Above the main and pause menus (kPauseMenu), as a message box is.
 				depthPriority = RE::UI_DEPTH_PRIORITY::kMessage;
 				inputContext = RE::UserEvents::INPUT_CONTEXT_ID::kBasicMenuNav;
 				const auto scaleform = RE::BSScaleformManager::GetSingleton();
 				if (!scaleform || !scaleform->LoadMovieEx(*this, MOVIE, "root")) {
-					REX::ERROR("MPMenu: {} could not be loaded; is it in Data/Interface?", MOVIE);
+					REX::ERROR("MPMenu: {} could not be loaded; is it in Data/Interface? Using message boxes", MOVIE);
+					MainThread::Post([] { Menu::Open(); });
 					return;
+				}
+				// Our objects with a size, as shader targets for the renderer (each one's bounds becomes a quad; the movie's root
+				// gave an empty one). What they draw keeps the movie's colors under a white filter (no-color draws them black). The
+				// panel's ground is the renderer's, as the main menu's is (its backgrounds are no-color, shaded with the gameplay HUD
+				// color): the movie's Background_mc only gives it its size.
+				{
+					for (const auto path : { "root.Panel_mc.Content_mc", "root.Hint_mc" }) {
+						auto target = std::make_unique<RE::BSGFxShaderFXTarget>(*uiMovie, path);
+						target->CreateAndSetFiltersToColor(std::uint8_t{ 255 }, std::uint8_t{ 255 }, std::uint8_t{ 255 }, 1.0f);
+						shaderFXObjects.push_back(target.get());
+						targets.push_back(std::move(target));
+					}
+					auto ground = std::make_unique<RE::BSGFxShaderFXTarget>(*uiMovie, "root.Panel_mc.Background_mc");
+					ground->CreateAndSetFiltersToHUD(RE::HUDColorTypes::kNoColorMultiplier);
+					ground->EnableShadedBackground(RE::HUDColorTypes::kGameplayHUDColor);
+					shaderFXObjects.push_back(ground.get());
+					targets.push_back(std::move(ground));
 				}
 				SetCode();
 				RefreshPlatform();  // again, now that the movie can answer: keyboard or gamepad, for the back hint
-				Fill();
-				if constexpr (SHADED) {
-					Shade();
+				SetLook();
+			}
+
+			~Panel() override
+			{
+				if (number == opened.load()) {
+					wanted = false;
 				}
+			}
+
+			// Flash objects are written only here, in the menu's own update.
+			void AdvanceMovie(float a_timeDelta, std::uint64_t a_time) override
+			{
+				if (uiMovie) {
+					DrawPage();
+				}
+				GameMenuBase::AdvanceMovie(a_timeDelta, a_time);
 			}
 
 			// The game's user events go on to the movie (ProcessUserEvent), but for the way back out, read here.
@@ -146,10 +192,16 @@ namespace MPMenu
 					// ours (the game's own menus get theirs from their own input handling), so they are read by code.
 					const bool keyboard = a_event->device.get() == RE::INPUT_DEVICE::kKeyboard;
 					const bool gamepad = a_event->device.get() == RE::INPUT_DEVICE::kGamepad;
+					const bool mouse = a_event->device.get() == RE::INPUT_DEVICE::kMouse;
+					if (capturing && (keyboard || (mouse && KeyNames::FromMouse(a_event->QIDCode()) != 0))) {
+						capturing = false;
+						MainThread::Post([keyboard, code = a_event->QIDCode()] { Menu::PanelKey(keyboard, code); });
+						return;
+					}
 					constexpr std::uint32_t ESCAPE = 0x1B, TAB = 0x09, PAD_B = 0x2000;  // Windows virtual keys, XInput's B
 					if ((keyboard && (a_event->QIDCode() == ESCAPE || a_event->QIDCode() == TAB)) || (gamepad && a_event->QIDCode() == PAD_B)) {
 						RE::UIUtils::PlayMenuSound("UIMenuCancel");
-						MainThread::Post([] { Hide(); });
+						MainThread::Post([] { Menu::PanelBack(); });
 						return;
 					}
 				}
@@ -157,25 +209,6 @@ namespace MPMenu
 			}
 
 		private:
-			// The game's own color and background shaders on the movie's layers (MPMenu.as names them).
-			void Shade()
-			{
-				// The panel's ground is the movie's own: the game's shaded background on a layer of ours drew it black.
-				for (const auto [path, background] : { std::pair{ "root.Panel_mc.Content_mc", false }, std::pair{ "root.Hint_mc", false } }) {
-					auto target = std::make_unique<RE::BSGFxShaderFXTarget>(*uiMovie, path);
-					// As the main menu sets its own (MainMenuEntry logs them): panel backgrounds shaded with the gameplay HUD
-					// color and no tint, everything else tinted with the color the player set.
-					if (background) {
-						target->CreateAndSetFiltersToHUD(RE::HUDColorTypes::kNoColorMultiplier);
-						target->EnableShadedBackground(RE::HUDColorTypes::kGameplayHUDColor);
-					} else {
-						target->CreateAndSetFiltersToHUD(RE::HUDColorTypes::kPlayerSetColor);
-					}
-					shaderFXObjects.push_back(target.get());
-					targets.push_back(std::move(target));
-				}
-			}
-
 			std::vector<std::unique_ptr<RE::BSGFxShaderFXTarget>> targets;  // before the base's list of them goes
 
 			void SetCode()
@@ -200,27 +233,48 @@ namespace MPMenu
 				}
 			}
 
-			void Fill()
+			void DrawPage()
 			{
-				GValue labels;
-				uiMovie->CreateArray(&labels);
-				for (const auto key : ENTRIES) {
-					const auto text = Text::Get(key);
-					labels.PushBack(GValue(text.c_str()));  // the movie copies it into a string of its own
+				std::optional<Page> page;
+				{
+					std::scoped_lock l{ pageLock };
+					page.swap(nextPage);
 				}
+				if (!page) {
+					return;
+				}
+				GValue rows;
+				uiMovie->CreateArray(&rows);
+				for (const auto& row : page->rows) {
+					rows.PushBack(GValue(row.c_str()));  // the movie copies it into a string of its own
+				}
+				GValue hints;
+				uiMovie->CreateArray(&hints);
+				for (const auto& hint : page->hints) {
+					hints.PushBack(GValue(hint.c_str()));
+				}
+				const std::array<GValue, 6> args{ GValue(static_cast<double>(page->serial)), GValue(page->body.c_str()), rows, hints, GValue(page->keepRow), GValue(page->heading) };
+				if (!menuObj.Invoke("SetPage", nullptr, args.data(), args.size())) {
+					REX::WARN("MPMenu: the movie has no SetPage");
+				}
+			}
+
+			void SetLook()
+			{
 				auto version = std::format("{}", F4SE::GetPluginVersion());
 				while (version.ends_with(".0") && std::ranges::count(version, '.') > 2) {
 					version.resize(version.size() - 2);  // 0.10.1.0: 0.10.1
 				}
-				const auto footer = std::format("F4Multiplayer {}", version);
 				const auto back = Text::Get("mpmenu.back");
-				const std::array<GValue, 9> args{ labels, GValue(static_cast<double>(boxLeft.load())), GValue(static_cast<double>(boxTop.load())),
+				const std::array<GValue, 8> args{ GValue(static_cast<double>(boxLeft.load())), GValue(static_cast<double>(boxTop.load())),
 					GValue(static_cast<double>(boxRight.load())), GValue(static_cast<double>(boxBottom.load())),
-					GValue(static_cast<double>(HudColor())), GValue(footer.c_str()), GValue(back.c_str()), GValue(SHADED) };
-				if (!menuObj.Invoke("SetEntries", nullptr, args.data(), args.size())) {
-					REX::WARN("MPMenu: the movie has no SetEntries");
+					GValue(static_cast<double>(HudColor())), GValue("F4Multiplayer"), GValue(version.c_str()), GValue(back.c_str()) };
+				if (!menuObj.Invoke("SetLook", nullptr, args.data(), args.size())) {
+					REX::WARN("MPMenu: the movie has no SetLook");
 				}
 			}
+
+			std::uint32_t number;  // which opening this menu is
 		};
 
 		RE::IMenu* Create(const RE::UIMessage&)
@@ -244,8 +298,38 @@ namespace MPMenu
 		boxTop = a_top;
 		boxRight = a_right;
 		boxBottom = a_bottom;
+		{
+			std::scoped_lock l{ pageLock };
+			nextPage.reset();
+		}
+		++opened;
+		wanted = true;
 		if (const auto queue = RE::UIMessageQueue::GetSingleton()) {
 			queue->AddMessage(NAME, RE::UI_MESSAGE_TYPE::kShow);
 		}
+		Menu::OpenInPanel();
+	}
+
+	void SetPage(std::uint32_t a_serial, std::string a_body, std::vector<std::string> a_rows, std::vector<std::string> a_hints, bool a_keepRow, bool a_heading)
+	{
+		std::scoped_lock l{ pageLock };
+		nextPage = Page{ a_serial, std::move(a_body), std::move(a_rows), std::move(a_hints), a_keepRow, a_heading };
+	}
+
+	void CaptureKey(bool a_on)
+	{
+		capturing = a_on;
+	}
+
+	void Close()
+	{
+		capturing = false;
+		wanted = false;
+		Hide();
+	}
+
+	bool Showing()
+	{
+		return wanted;
 	}
 }

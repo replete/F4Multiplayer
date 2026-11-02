@@ -32,7 +32,6 @@ namespace MainMenuEntry
 			const char* menu;
 			AdvanceFn   original = nullptr;
 			bool        loggedNoList = false;  // the menu's update thread only
-			bool        loggedLayout = false;
 		};
 		Hooked mainMenu{ "main menu" };
 		Hooked pauseMenu{ "pause menu" };
@@ -63,20 +62,6 @@ namespace MainMenuEntry
 		};
 		Bounds mainBox{ 230.0, 230.0, 160.0, 330.0 };  // under boxLock
 
-		Bounds BoundsOf(GValue& a_object)
-		{
-			Bounds bounds;
-			if (!a_object.IsDisplayObject()) {
-				return bounds;
-			}
-			GValue x, y, width, height;
-			a_object.GetMember("x", &x);
-			a_object.GetMember("y", &y);
-			a_object.GetMember("width", &width);
-			a_object.GetMember("height", &height);
-			return { Number(x), Number(y), Number(width), Number(height) };
-		}
-
 		// An object's box on the stage (getBounds against the movie's root): the menu's panels are drawn at offsets of their
 		// own inside the menu object, which is itself placed (and scaled) to the screen's safe area.
 		Bounds StageBoundsOf(Scaleform::GFx::Movie* a_movie, GValue& a_object)
@@ -92,93 +77,6 @@ namespace MainMenuEntry
 			rect.GetMember("width", &width);
 			rect.GetMember("height", &height);
 			return { Number(x), Number(y), Number(width), Number(height) };
-		}
-
-		// While matching our menu's look to the game's: the main menu's panels, lists and texts once, to the log (place,
-		// size, and a text's font and size), three levels down.
-		void LogObjects(GValue& a_object, const std::string& a_path, int a_depth)
-		{
-			GValue count;
-			if (a_depth <= 0 || !a_object.IsDisplayObject() || !a_object.GetMember("numChildren", &count)) {
-				return;
-			}
-			for (int i = 0; i < static_cast<int>(Number(count)) && i < 24; ++i) {
-				GValue child;
-				GValue index{ static_cast<double>(i) };
-				if (!a_object.Invoke("getChildAt", &child, &index, 1) || !child.IsDisplayObject()) {
-					continue;
-				}
-				GValue name, visible, text, alpha, transform, colors;
-				child.GetMember("name", &name);
-				child.GetMember("visible", &visible);
-				child.GetMember("alpha", &alpha);
-				std::string tint;
-				if (child.GetMember("transform", &transform) && transform.IsObject() && transform.GetMember("colorTransform", &colors) && colors.IsObject()) {
-					GValue r, g, b, a, ro, go, bo;
-					colors.GetMember("redMultiplier", &r);
-					colors.GetMember("greenMultiplier", &g);
-					colors.GetMember("blueMultiplier", &b);
-					colors.GetMember("alphaMultiplier", &a);
-					colors.GetMember("redOffset", &ro);
-					colors.GetMember("greenOffset", &go);
-					colors.GetMember("blueOffset", &bo);
-					tint = std::format(" alpha={:.2f} mult=({:.2f},{:.2f},{:.2f},{:.2f}) offset=({},{},{})", Number(alpha), Number(r), Number(g), Number(b), Number(a), Number(ro),
-						Number(go), Number(bo));
-				}
-				const auto path = a_path + "." + (name.IsString() ? name.GetString() : std::format("#{}", i));
-				const auto at = BoundsOf(child);
-				std::string extra;
-				if (child.GetMember("text", &text) && text.IsString()) {
-					GValue format, font, size, color;
-					if (child.Invoke("getTextFormat", &format) && format.IsObject()) {
-						format.GetMember("font", &font);
-						format.GetMember("size", &size);
-					}
-					child.GetMember("textColor", &color);
-					extra = std::format(" text='{}' font='{}' size={} color={:06X}", text.GetString(), font.IsString() ? font.GetString() : "?", Number(size),
-						static_cast<std::uint32_t>(Number(color)));
-				}
-				REX::INFO("MainMenuEntry: layout {} x={:.1f} y={:.1f} w={:.1f} h={:.1f} visible={}{}{}", path, at.x, at.y, at.width, at.height,
-					visible.IsBoolean() && visible.GetBoolean(), tint, extra);
-				LogObjects(child, path, a_depth - 1);
-			}
-		}
-
-		// While matching our menu's look: how the game draws this menu (its renderer and flags) and the shader targets it
-		// tints and shades, by the name of each one's object.
-		void LogRendering(RE::IMenu* a_menu, const Hooked& a_hooked)
-		{
-			const auto game = static_cast<RE::GameMenuBase*>(a_menu);
-			REX::INFO("MainMenuEntry: the {} renders with '{}', flags {:X}, depth {}, {} shader targets", a_hooked.menu, a_menu->customRendererName.c_str(),
-				a_menu->menuFlags.underlying(), static_cast<int>(a_menu->depthPriority), game->shaderFXObjects.size());
-			for (const auto target : game->shaderFXObjects) {
-				if (!target) {
-					continue;
-				}
-				GValue name;
-				GValue shaded;
-				const bool display = target->IsDisplayObject();
-				if (display) {
-					target->GetMember("name", &name);
-					target->GetMember("bUseShadedBackground", &shaded);
-				}
-				REX::INFO("MainMenuEntry: shader target '{}' color {} background {} shaded member {}", name.IsString() ? name.GetString() : "?",
-					static_cast<int>(target->HUDColorType.get()), static_cast<int>(target->backgroundColorType.get()),
-					shaded.IsBoolean() ? (shaded.GetBoolean() ? "true" : "false") : "none");
-			}
-		}
-
-		void LogLayout(Scaleform::GFx::Movie* a_movie, const Hooked& a_hooked)
-		{
-			REX::INFO("MainMenuEntry: the {}'s layout, once", a_hooked.menu);
-			for (const auto path : { "root.MainPanel_mc", "root.SettingsPanel_mc", "root.Menu_mc.MainPanel_mc", "root.Menu_mc.SettingsPanel_mc" }) {
-				GValue object;
-				if (a_movie->GetVariable(&object, path)) {
-					const auto at = BoundsOf(object);
-					REX::INFO("MainMenuEntry: layout {} x={:.1f} y={:.1f} w={:.1f} h={:.1f}", path, at.x, at.y, at.width, at.height);
-					LogObjects(object, path, 3);
-				}
-			}
 		}
 
 		bool FindList(Scaleform::GFx::Movie* a_movie, GValue& a_list)
@@ -210,12 +108,7 @@ namespace MainMenuEntry
 					return;
 				}
 				REX::INFO("MainMenuEntry: Multiplayer pressed");
-				MainThread::Post([] { Bounds box;
-					{
-						std::scoped_lock l{ boxLock };
-						box = mainBox;
-					}
-					MPMenu::Open(static_cast<float>(box.x), static_cast<float>(box.y), static_cast<float>(box.x + box.width), static_cast<float>(box.y + box.height)); });
+				MainThread::Post([] { OpenPanel(); });
 			}
 		};
 		PressHandler* handler = nullptr;  // made on the first update (Scaleform's heap is up by then), never let go
@@ -233,10 +126,6 @@ namespace MainMenuEntry
 					REX::WARN("MainMenuEntry: the {} has no list where MainMenu.swf has it; no Multiplayer entry there", a_hooked.menu);
 				}
 				return;
-			}
-			if (!std::exchange(a_hooked.loggedLayout, true)) {
-				LogLayout(movie, a_hooked);
-				LogRendering(a_menu, a_hooked);
 			}
 			// The main panel's box on the stage: ours goes beside it, as the game's own second column does.
 			GValue box;
@@ -313,6 +202,16 @@ namespace MainMenuEntry
 			REL::WriteSafeData(slot, reinterpret_cast<std::uintptr_t>(a_advance));
 			REX::INFO("MainMenuEntry: hooked the {}'s update (vtable {:X})", a_hooked.menu, a_vtable);
 		}
+	}
+
+	void OpenPanel()
+	{
+		Bounds box;
+		{
+			std::scoped_lock l{ boxLock };
+			box = mainBox;
+		}
+		MPMenu::Open(static_cast<float>(box.x), static_cast<float>(box.y), static_cast<float>(box.x + box.width), static_cast<float>(box.y + box.height));
 	}
 
 	void Install()
