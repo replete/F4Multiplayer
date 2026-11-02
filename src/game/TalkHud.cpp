@@ -35,6 +35,7 @@ namespace TalkHud
 		std::mutex           stateLock;
 		std::optional<State> nextState;  // under stateLock
 		std::atomic<std::uint32_t> applied{ 0 };
+		std::atomic<int>     alive{ 0 };
 		std::atomic<bool>    noMovie{ false };  // it could not be loaded: not asked for again this run
 		std::atomic<bool>    fresh{ false };    // a new movie: it knows nothing yet
 
@@ -47,6 +48,7 @@ namespace TalkHud
 		public:
 			Panel()
 			{
+				++alive;
 				// Beside the game's HUD: no pause, cursor, input or menu context, as the developer HUD.
 				menuFlags.set(RE::UI_MENU_FLAGS::kAllowSaving, RE::UI_MENU_FLAGS::kRequiresUpdate, RE::UI_MENU_FLAGS::kAdvancesUnderPauseMenu,
 					RE::UI_MENU_FLAGS::kRendersUnderPauseMenu);
@@ -57,6 +59,11 @@ namespace TalkHud
 					noMovie = true;
 				}
 				fresh = true;
+			}
+
+			~Panel() override
+			{
+				--alive;
 			}
 
 			// Flash objects are written only here. Nothing is written while the UI is held (UiHold.h).
@@ -94,10 +101,11 @@ namespace TalkHud
 			}
 		}
 
+		// Whether our menu exists, kept by the menu itself. Asking the UI would take a reference to it, and could be what
+		// destroys a closing menu on this thread (OpenMenus.h).
 		bool IsOpen()
 		{
-			const auto ui = RE::UI::GetSingleton();
-			return ui && ui->GetMenuOpen(NAME);
+			return alive.load() > 0;
 		}
 	}
 

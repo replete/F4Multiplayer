@@ -43,6 +43,7 @@ namespace DevHud
 		std::optional<Text> nextText;  // under textLock
 		std::atomic<std::uint32_t> applied{ 0 };
 		std::atomic<std::uint32_t> made{ 0 };
+		std::atomic<int>           alive{ 0 };
 		std::atomic<bool>          noMovie{ false };  // it could not be loaded: not asked for again this run
 
 		// Gathered on the main thread only.
@@ -63,6 +64,7 @@ namespace DevHud
 			Panel()
 			{
 				++made;
+				++alive;
 				// Beside the game's HUD: no pause, cursor, input or menu context. Not through the game's menu renderer
 				// (kCustomRendering): a menu that isn't draws in a later pass, over all the others.
 				menuFlags.set(RE::UI_MENU_FLAGS::kAllowSaving, RE::UI_MENU_FLAGS::kRequiresUpdate, RE::UI_MENU_FLAGS::kAdvancesUnderPauseMenu,
@@ -73,6 +75,11 @@ namespace DevHud
 					REX::ERROR("DevHud: {} could not be loaded; is it in Data/Interface?", MOVIE);
 					noMovie = true;
 				}
+			}
+
+			~Panel() override
+			{
+				--alive;
 			}
 
 			// Flash objects are written only here. Nothing is written while the UI is held (UiHold.h).
@@ -109,10 +116,11 @@ namespace DevHud
 			}
 		}
 
+		// Whether our menu exists, kept by the menu itself. Asking the UI would take a reference to it, and could be what
+		// destroys a closing menu on this thread (OpenMenus.h).
 		bool IsOpen()
 		{
-			const auto ui = RE::UI::GetSingleton();
-			return ui && ui->GetMenuOpen(NAME);
+			return alive.load() > 0;
 		}
 
 		DevHudText::Link LinkOf(const Session::Status& a_status)
