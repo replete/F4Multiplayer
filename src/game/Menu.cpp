@@ -5,6 +5,8 @@
 #include "game/Hud.h"
 #include "game/KeyNames.h"
 #include "game/MPMenu.h"
+#include "game/Voice.h"
+#include "game/VoiceSteps.h"
 #include "game/Party.h"
 #include "game/RemotePlayers.h"
 #include "net/Session.h"
@@ -122,11 +124,14 @@ namespace Menu
 
 		bool mainShowing = false;  // the main page is the one showing
 		int listeningFor = -1;     // the Keybinds row waiting for its key
+		bool voiceShowing = false; // the Voice page is the one showing
+		Clock::time_point nextVoiceDraw{};
 
 		void Show(const std::string& a_body, std::vector<Button> a_buttons)
 		{
 			mainShowing = false;  // ShowMainPage says so after this
 			listeningFor = -1;    // ShowKeybinds says so after this
+			voiceShowing = false; // ShowVoice says so after this
 			// The panel: no limit on buttons, and the first, the page's way back (see ShowPaged), is Esc rather than a row.
 			if (inPanel) {
 				buttons = std::move(a_buttons);
@@ -182,6 +187,7 @@ namespace Menu
 		void ShowMain();
 		void ShowAbout();
 		void ShowKeybinds(int a_listening, std::string a_said);
+		void ShowVoice();
 		void ShowJoin(std::size_t a_page);
 		void ShowSettings(std::size_t a_page);
 
@@ -603,6 +609,7 @@ namespace Menu
 			}
 			entries.push_back({ Text::Get("menu.settings"), [] { ShowSettings(0); } });
 			if (inPanel) {
+				entries.push_back({ Text::Get("menu.voice"), ShowVoice });
 				entries.push_back({ Text::Get("menu.keybinds"), [] { ShowKeybinds(-1, {}); } });
 				entries.push_back({ Text::Get("menu.about"), ShowAbout });
 			}
@@ -689,9 +696,9 @@ namespace Menu
 			{ "menu.voice_chat", "menu.voice_chat_what", &Config::Settings::voiceChat, "bVoiceChat", "true", "false" },
 			{ "menu.spoken_lines", "menu.spoken_lines_what", &Config::Settings::spokenLines, "bSpokenLines", "true", "false" },
 			{ "menu.compass_markers", "menu.compass_markers_what", &Config::Settings::compassMarkers, "bCompassMarkers", "true", "false" },
-			{ "menu.developer_hud", "menu.developer_hud_what", &Config::Settings::developerHud, "bDeveloperHud", "true", "false" },
 			{ "menu.fast_loading", "menu.fast_loading_what", &Config::Settings::fastLoading, "bFastLoading", "true", "false" },
 			{ "menu.lend_power_armor", "menu.lend_power_armor_what", &Config::Settings::lendPowerArmor, "bLendPowerArmor", "true", "false" },
+			{ "menu.developer_hud", "menu.developer_hud_what", &Config::Settings::developerHud, "bDeveloperHud", "true", "false" },
 		} };
 
 		// --- Keybinds (the panel only: it can hear a key). Hotkeys and Voice read the settings as they go, so a change is
@@ -739,6 +746,70 @@ namespace Menu
 			if (a_listening >= 0) {
 				MPMenu::CaptureKey(true);
 			}
+		}
+
+		std::string VoiceStatus()
+		{
+			if (!Voice::MicTesting()) {
+				return Text::Get("menu.voice_mic_note");
+			}
+			const auto level = Voice::MicLevel();
+			return Text::Format("menu.mic_level", { { "bar", VoiceSteps::Bar(level) }, { "db", std::format("{:.0f}", level) } });
+		}
+
+		// Voice chat's settings and a mic test (the panel only: the message box has four buttons). The microphone itself is
+		// Steam's choice: its voice calls take no device.
+		void ShowVoice()
+		{
+			const auto& settings = Config::Get();
+			const auto  again = [] {
+				keepRow = true;
+				ShowVoice();
+			};
+			const auto toggle = [&](const char* a_name, const char* a_what, bool Config::Settings::*a_value, const char* a_key) -> Button {
+				return { Text::Get(a_name), [=] {
+							auto&      s = Config::Mutable();
+							const bool now = !(s.*a_value);
+							s.*a_value = now;
+							Config::Write(a_key, now ? "true" : "false");
+							again();
+						},
+					Text::Get(a_what), OnOff(settings.*a_value) };
+			};
+			std::vector<Button> rows{ { Text::Get("menu.back"), [] { Voice::SetMicTest(false); ShowMain(); } } };
+			rows.push_back(toggle("menu.voice_chat", "menu.voice_chat_what", &Config::Settings::voiceChat, "bVoiceChat"));
+			rows.push_back(toggle("menu.open_mic", "menu.open_mic_what", &Config::Settings::voiceOpenMic, "bVoiceOpenMic"));
+			rows.push_back(toggle("menu.talk_hud", "menu.talk_hud_what", &Config::Settings::talkHud, "bTalkHud"));
+			rows.push_back({ Text::Get("menu.voice_volume"), [=] {
+								auto& s = Config::Mutable();
+								s.voiceVolume = VoiceSteps::Next(VoiceSteps::VOLUMES, s.voiceVolume);
+								Config::Write("iVoiceVolume", std::to_string(s.voiceVolume).c_str());
+								again();
+							},
+				Text::Get("menu.voice_volume_what"), std::format("{}%", settings.voiceVolume) });
+			rows.push_back({ Text::Get("menu.voice_range"), [=] {
+								auto& s = Config::Mutable();
+								s.voiceRange = VoiceSteps::Next(VoiceSteps::RANGES, s.voiceRange);
+								Config::Write("fVoiceRange", std::format("{:.0f}", s.voiceRange).c_str());
+								again();
+							},
+				Text::Get("menu.voice_range_what"), settings.voiceRange > 0.0f ? std::format("{:.0f} m", settings.voiceRange) : Text::Get("menu.voice_range_all") });
+			rows.push_back({ Text::Get("menu.voice_output"), [=] {
+								auto&      s = Config::Mutable();
+								const auto names = Voice::Outputs();
+								s.voiceOutput = VoiceSteps::NextOutput(names, s.voiceOutput);
+								Config::Write("sVoiceOutput", s.voiceOutput.c_str());
+								Voice::CloseOutputs();
+								again();
+							},
+				Text::Get("menu.voice_output_what"), settings.voiceOutput.empty() ? Text::Get("menu.voice_output_default") : settings.voiceOutput });
+			rows.push_back({ Text::Get("menu.mic_test"), [=] {
+								Voice::SetMicTest(!Voice::MicTesting());
+								again();
+							},
+				Text::Get("menu.mic_test_what"), OnOff(Voice::MicTesting()) });
+			Show(VoiceStatus(), std::move(rows));
+			voiceShowing = true;
 		}
 
 		void ShowSettings(std::size_t a_page)
@@ -864,6 +935,10 @@ namespace Menu
 
 	void Frame()
 	{
+		// The mic test lasts as long as its page does, whichever way that goes.
+		if (Voice::MicTesting() && (!inPanel || !voiceShowing)) {
+			Voice::SetMicTest(false);
+		}
 		// The panel went (the game closed it for a load, say): the pages with it.
 		if (inPanel && !MPMenu::Showing()) {
 			inPanel = false;
@@ -906,6 +981,11 @@ namespace Menu
 				keepRow = true;
 				ShowMainPage(mainPage);
 			}
+		}
+		if (inPanel && voiceShowing && Voice::MicTesting() && Clock::now() >= nextVoiceDraw) {
+			nextVoiceDraw = Clock::now() + 100ms;
+			lastBody = Clean(VoiceStatus());
+			MPMenu::SetStatus(lastBody);
 		}
 		std::optional<ButtonPress> press;
 		{

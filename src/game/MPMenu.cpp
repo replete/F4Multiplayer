@@ -1,4 +1,5 @@
 #include "game/MPMenu.h"
+#include "game/MainMenuEntry.h"
 
 #include "MainThread.h"
 #include "Text.h"
@@ -32,6 +33,7 @@ namespace MPMenu
 			kClose,
 			kPlaySound,
 			kLog,
+			kMouseOutside,
 		};
 
 		// The page to draw: set on the main thread, taken in the menu's own update.
@@ -46,6 +48,7 @@ namespace MPMenu
 		};
 		std::mutex          pageLock;
 		std::optional<Page> nextPage;  // under pageLock
+		std::optional<std::string> nextStatus;  // under pageLock
 
 		// Opened and not closed since. A menu going away counts only if it is the latest opened: one being hidden can
 		// go after the next has been asked for.
@@ -115,6 +118,11 @@ namespace MPMenu
 				case Code::kPlaySound:
 					if (a_params.argCount > 0 && a_params.args[0].IsString()) {
 						RE::UIUtils::PlayMenuSound(a_params.args[0].GetString());
+					}
+					break;
+				case Code::kMouseOutside:
+					if (a_params.argCount > 2 && a_params.args[0].IsNumber() && a_params.args[1].IsNumber() && a_params.args[2].IsBoolean()) {
+						MainMenuEntry::PanelMouse(static_cast<float>(a_params.args[0].GetNumber()), static_cast<float>(a_params.args[1].GetNumber()), a_params.args[2].GetBoolean());
 					}
 					break;
 				case Code::kLog:
@@ -229,7 +237,7 @@ namespace MPMenu
 				GValue code;
 				uiMovie->CreateObject(&code);
 				for (const auto [name, id] : { std::pair{ "Pressed", Code::kPressed }, std::pair{ "Close", Code::kClose }, std::pair{ "PlaySound", Code::kPlaySound },
-						 std::pair{ "Log", Code::kLog } }) {
+						 std::pair{ "Log", Code::kLog }, std::pair{ "MouseOutside", Code::kMouseOutside } }) {
 					GValue function;
 					uiMovie->CreateFunction(&function, codeHandler, reinterpret_cast<void*>(static_cast<std::uintptr_t>(id)));
 					code.SetMember(name, function);
@@ -241,10 +249,16 @@ namespace MPMenu
 
 			void DrawPage()
 			{
-				std::optional<Page> page;
+				std::optional<Page>        page;
+				std::optional<std::string> status;
 				{
 					std::scoped_lock l{ pageLock };
 					page.swap(nextPage);
+					status.swap(nextStatus);
+				}
+				if (status) {
+					const std::array<GValue, 1> args{ GValue(status->c_str()) };
+					menuObj.Invoke("SetStatus", nullptr, args.data(), args.size());
 				}
 				if (!page) {
 					return;
@@ -310,6 +324,7 @@ namespace MPMenu
 		{
 			std::scoped_lock l{ pageLock };
 			nextPage.reset();
+			nextStatus.reset();
 		}
 		++opened;
 		wanted = true;
@@ -324,6 +339,13 @@ namespace MPMenu
 	{
 		std::scoped_lock l{ pageLock };
 		nextPage = Page{ a_serial, std::move(a_body), std::move(a_rows), std::move(a_hints), a_keepRow, a_heading };
+		nextStatus.reset();
+	}
+
+	void SetStatus(std::string a_text)
+	{
+		std::scoped_lock l{ pageLock };
+		nextStatus = std::move(a_text);
 	}
 
 	void CaptureKey(bool a_on)

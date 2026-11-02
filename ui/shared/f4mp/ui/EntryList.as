@@ -13,10 +13,13 @@ package f4mp.ui
 	{
 		public static const CHEVRON_SLOT:Number = 0.42;  // the chevrons' room, of a row's pitch: the owner leaves this above the list
 		private static const VALUE_AT:Number = 0.75;  // the middle of the values' column, of the row's width
-		private static const CHEVRON_WIDE:Number = 28;
-		private static const CHEVRON_TALL:Number = 10;
-		private static const CHEVRON_APART:Number = 9;
-		private static const CHEVRON_LINE:Number = 3;
+		// The game's own (the ScrollUp symbol of its lists, MainMenu.swf), in its units: two filled chevrons, pointing up.
+		private static const CHEVRON_WIDE:Number = 13.5;
+		private static const CHEVRON_TALL:Number = 11.55;
+		private static const CHEVRON_ARM:Number = 1.9;     // the gap between a chevron's ends, in from each side
+		private static const CHEVRON_RISE:Number = 6;      // a chevron's height at its outer edge
+		private static const CHEVRON_INNER:Number = 1.7;   // its thickness at the tip
+		private static const CHEVRON_APART:Number = 5.55;
 
 		private var rows:Array = [];
 		private var scroller:Sprite = new Sprite();
@@ -62,6 +65,9 @@ package f4mp.ui
 		// a_labels: the entries' text fields (Style.Text), already measured by the owner for the panel's width. a_values: for
 		// each, the text field of what it's set to, in a column toward the row's right (null: none). a_layout:
 		// pitch, barHeight, barInset, textInset, width and height (of the part shown), all scaled.
+		private var builtMouseX:Number = 0;
+		private var builtMouseY:Number = 0;
+
 		public function Build(a_labels:Array, a_values:Array, a_layout:Object, a_color:uint, a_scale:Number):void
 		{
 			Style.Clear(scroller);
@@ -88,6 +94,8 @@ package f4mp.ui
 				rows.push(row);
 			}
 			selected = -1;
+			builtMouseX = mouseX;
+			builtMouseY = mouseY;
 			if (scrolls) {
 				moreAbove = Chevrons(true, -1, a_color, a_scale);
 				moreAbove.x = a_layout.textInset;
@@ -153,7 +161,12 @@ package f4mp.ui
 			}
 
 			row.buttonMode = true;
-			row.addEventListener(MouseEvent.ROLL_OVER, function(a_e:MouseEvent):void { Select(a_index, true); });
+			row.addEventListener(MouseEvent.ROLL_OVER, function(a_e:MouseEvent):void {
+				// Only a mouse that moved: a row built under a still one rolls over too, and a redraw would take the choice from the keys.
+				if (mouseX != builtMouseX || mouseY != builtMouseY) {
+					Select(a_index, true);
+				}
+			});
 			row.addEventListener(MouseEvent.CLICK, function(a_e:MouseEvent):void { Press(a_index); });
 			return row;
 		}
@@ -185,20 +198,26 @@ package f4mp.ui
 		private function Chevrons(a_up:Boolean, a_by:int, a_color:uint, a_scale:Number):Sprite
 		{
 			var chevrons:Sprite = new Sprite();
-			var wide:Number = Math.round(CHEVRON_WIDE * a_scale);
-			var tall:Number = Math.round(CHEVRON_TALL * a_scale);
-			var apart:Number = Math.round(CHEVRON_APART * a_scale);
+			var wide:Number = CHEVRON_WIDE * a_scale;
+			var tall:Number = CHEVRON_TALL * a_scale;
 			chevrons.graphics.beginFill(Style.BLACK, 0.001);
-			chevrons.graphics.drawRect(0, 0, wide, tall + apart);
+			chevrons.graphics.drawRect(0, 0, wide, tall);
 			chevrons.graphics.endFill();
 			var lines:Shape = new Shape();
-			lines.graphics.lineStyle(Math.max(1, Math.round(CHEVRON_LINE * a_scale)), a_color, 1, true, "normal", "none", "miter");
+			// From the top of the pair down, flipped for the lower one, as the game flips the symbol.
+			var y:Function = function(a_y:Number):Number { return (a_up ? a_y : CHEVRON_TALL - a_y) * a_scale; };
+			lines.graphics.beginFill(a_color);
 			for (var i:int = 0; i < 2; ++i) {
-				var from:Number = apart * i;
-				lines.graphics.moveTo(0, a_up ? from + tall : from);
-				lines.graphics.lineTo(wide / 2, a_up ? from : from + tall);
-				lines.graphics.lineTo(wide, a_up ? from + tall : from);
+				var from:Number = CHEVRON_APART * i;
+				lines.graphics.moveTo(0, y(from + CHEVRON_RISE));
+				lines.graphics.lineTo(wide / 2, y(from));
+				lines.graphics.lineTo(wide, y(from + CHEVRON_RISE));
+				lines.graphics.lineTo(wide - CHEVRON_ARM * a_scale, y(from + CHEVRON_RISE));
+				lines.graphics.lineTo(wide / 2, y(from + CHEVRON_INNER));
+				lines.graphics.lineTo(CHEVRON_ARM * a_scale, y(from + CHEVRON_RISE));
+				lines.graphics.lineTo(0, y(from + CHEVRON_RISE));
 			}
+			lines.graphics.endFill();
 			lines.filters = [ Style.Shadow(a_scale) ];
 			chevrons.addChild(lines);
 			chevrons.buttonMode = true;

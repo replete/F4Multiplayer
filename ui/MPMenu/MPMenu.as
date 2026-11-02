@@ -9,9 +9,11 @@ package
 	import flash.display.MovieClip;
 	import flash.display.Shape;
 	import flash.display.Sprite;
+	import flash.events.Event;
 	import flash.events.MouseEvent;
 	import flash.text.TextField;
 	import flash.text.TextFieldAutoSize;
+	import flash.utils.getTimer;
 
 	// The multiplayer menu's movie (src/game/MPMenu.cpp loads it as Interface/F4Multiplayer/MPMenu.swf): a second column
 	// beside the main menu's list, laid out as the game's own (Settings, Add-ons) are: just right of the main panel, its
@@ -79,6 +81,11 @@ package
 		private var gamepad:Boolean = false;
 		private var backWord:String = "";
 
+		private static const REPEAT_DELAY:int = 350;  // ms held before Up or Down repeats
+		private static const REPEAT_EVERY:int = 80;   // ms between repeats
+		private var held:int = 0;                     // -1 Up, 1 Down, 0 neither
+		private var nextRepeat:int = 0;
+
 		public function MPMenu()
 		{
 			super();
@@ -96,6 +103,12 @@ package
 			panel.addEventListener(MouseEvent.MOUSE_WHEEL, Wheel);
 			addChild(panel);
 			addChild(hint);
+			addEventListener(Event.ENTER_FRAME, Repeat);
+			// The main list beside us is another movie's, under this menu: the mouse is passed on to it.
+			if (stage != null) {
+				stage.addEventListener(MouseEvent.MOUSE_MOVE, function(a_e:MouseEvent):void { Outside(a_e, false); });
+				stage.addEventListener(MouseEvent.CLICK, function(a_e:MouseEvent):void { Outside(a_e, true); });
+			}
 		}
 
 		// From the plugin, once: the main panel's box on the stage (this movie's stage has the same size and
@@ -225,6 +238,14 @@ package
 		}
 
 		// Where the rows start under what ends at a_y, leaving the chevrons their room.
+		// The page's status line changed and nothing else, as often as it likes: the rows and the chosen one stay as they are.
+		public function SetStatus(a_text:String):void
+		{
+			if (bodyField != null) {
+				bodyField.text = a_text;
+			}
+		}
+
 		private function ListBelow(a_y:Number):Number
 		{
 			return Math.round(a_y + ROW_PITCH * scale * EntryList.CHEVRON_SLOT);
@@ -276,16 +297,18 @@ package
 		// The game's user events, keyboard and gamepad alike. True: taken here.
 		public function ProcessUserEvent(a_event:String, a_pressed:Boolean):Boolean
 		{
+			if (a_event == "Up" || a_event == "Down") {
+				held = a_pressed ? (a_event == "Up" ? -1 : 1) : 0;
+				if (a_pressed) {
+					nextRepeat = getTimer() + REPEAT_DELAY;
+					Step(held);
+				}
+				return true;
+			}
 			if (!a_pressed) {
 				return false;
 			}
 			switch (a_event) {
-				case "Up":
-					Step(-1);
-					return true;
-				case "Down":
-					Step(1);
-					return true;
 				case "Accept":
 					list.PressSelected();
 					return true;
@@ -295,6 +318,15 @@ package
 					return true;
 			}
 			return false;
+		}
+
+		// Up or Down held: the game gives us the press and the release, so the repeat is ours.
+		private function Repeat(a_e:Event):void
+		{
+			if (held != 0 && getTimer() >= nextRepeat) {
+				nextRepeat = getTimer() + REPEAT_EVERY;
+				Step(held);
+			}
 		}
 
 		private function Step(a_by:int):void
@@ -343,6 +375,17 @@ package
 					BGSCodeObj.Pressed(serial, a_index);
 				} catch (e:Error) {
 				}
+			}
+		}
+
+		private function Outside(a_e:MouseEvent, a_click:Boolean):void
+		{
+			if (BGSCodeObj == null || panel.hitTestPoint(a_e.stageX, a_e.stageY, false) || hint.hitTestPoint(a_e.stageX, a_e.stageY, true)) {
+				return;
+			}
+			try {
+				BGSCodeObj.MouseOutside(a_e.stageX, a_e.stageY, a_click);
+			} catch (e:Error) {
 			}
 		}
 

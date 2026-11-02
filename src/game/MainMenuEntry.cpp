@@ -10,6 +10,8 @@
 #include <format>
 #include <atomic>
 #include <mutex>
+#include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -32,6 +34,7 @@ namespace MainMenuEntry
 			const char* menu;
 			AdvanceFn   original = nullptr;
 			bool        loggedNoList = false;  // the menu's update thread only
+			bool        dimmed = false;        // its list shows that the multiplayer menu has the focus; the same thread
 		};
 		Hooked mainMenu{ "main menu" };
 		Hooked pauseMenu{ "pause menu" };
@@ -43,6 +46,17 @@ namespace MainMenuEntry
 		// is taken once per update.
 		std::atomic<std::uint64_t> advances{ 0 };
 		std::atomic<std::uint64_t> pressedAt{ ~0ull };
+
+		// The mouse from the multiplayer menu's movie, for the main list's next update.
+		struct PassedMouse
+		{
+			float x = 0.0f;
+			float y = 0.0f;
+			bool  click = false;
+		};
+		std::mutex                 mouseLock;
+		std::optional<PassedMouse> passedMouse;  // under mouseLock
+		std::optional<int>         pressWaiting;  // the row to press once the multiplayer menu has gone; the menu's update thread
 
 		// The main menu's panel box on the stage, read in the menu's update, for the multiplayer menu to line up with (both
 		// movies are 1280x720, shown whole). Until a menu has been seen: about where the main menu's is.
@@ -113,6 +127,83 @@ namespace MainMenuEntry
 		};
 		PressHandler* handler = nullptr;  // made on the first update (Scaleform's heap is up by then), never let go
 
+		// The row's clip at a point on the stage, among those the list shows.
+		bool ClipAt(GValue& a_list, float a_x, float a_y, GValue& a_clip, int& a_row)
+		{
+			GValue count;
+			if (!a_list.GetMember("numListItems", &count)) {
+				return false;
+			}
+			const auto shown = static_cast<std::uint32_t>(Number(count));
+			for (std::uint32_t i = 0; i < shown; ++i) {
+				GValue       clip;
+				GValue       index{ static_cast<double>(i) };
+				if (!a_list.Invoke("GetClipByIndex", &clip, &index, 1) || !clip.IsDisplayObject()) {
+					continue;
+				}
+				GValue visible;
+				if (clip.GetMember("visible", &visible) && visible.IsBoolean() && !visible.GetBoolean()) {
+					continue;
+				}
+				const std::array<GValue, 3> at{ GValue(static_cast<double>(a_x)), GValue(static_cast<double>(a_y)), GValue(false) };
+				GValue                      hit;
+				GValue                      row;
+				if (clip.Invoke("hitTestPoint", &hit, at.data(), at.size()) && hit.IsBoolean() && hit.GetBoolean() && clip.GetMember("itemIndex", &row) && Number(row) >= 0.0) {
+					a_clip = clip;
+					a_row = static_cast<int>(Number(row));
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// The mouse passed on from the multiplayer menu: a hover chooses the row, a click on another row closes that menu, and
+		// once it has gone the row is pressed by a click on its clip, as the game's own list hears one.
+		void PassMouse(Scaleform::GFx::Movie* a_movie, GValue& a_list, const std::vector<MainMenuPlace::Entry>& a_entries)
+		{
+			if (pressWaiting && !MPMenu::Showing()) {
+				const int row = *std::exchange(pressWaiting, std::nullopt);
+				a_list.SetMember("selectedIndex", GValue(static_cast<double>(row)));
+				GValue selected;
+				GValue clipIndex;
+				GValue clip;
+				if (a_list.GetMember("selectedEntry", &selected) && selected.IsObject() && selected.GetMember("clipIndex", &clipIndex)) {
+					GValue index{ Number(clipIndex) };
+					GValue event;
+					const std::array<GValue, 2> args{ GValue("click"), GValue(true) };
+					if (a_list.Invoke("GetClipByIndex", &clip, &index, 1) && clip.IsDisplayObject()) {
+						a_movie->CreateObject(&event, "flash.events.MouseEvent", args.data(), static_cast<std::uint32_t>(args.size()));
+						clip.Invoke("dispatchEvent", nullptr, &event, 1);
+					}
+				}
+				return;
+			}
+			std::optional<PassedMouse> mouse;
+			{
+				std::scoped_lock l{ mouseLock };
+				mouse.swap(passedMouse);
+			}
+			if (!mouse || !MPMenu::Showing()) {
+				return;
+			}
+			GValue clip;
+			int    row = -1;
+			if (!ClipAt(a_list, mouse->x, mouse->y, clip, row)) {
+				return;
+			}
+			GValue selectedIndex;
+			a_list.GetMember("selectedIndex", &selectedIndex);
+			if (static_cast<int>(Number(selectedIndex)) != row) {
+				a_list.SetMember("selectedIndex", GValue(static_cast<double>(row)));
+				RE::UIUtils::PlayMenuSound("UIMenuFocus");
+			}
+			const bool ours = row >= 0 && row < static_cast<int>(a_entries.size()) && a_entries[row].index == MainMenuPlace::ENTRY_INDEX;
+			if (mouse->click && !ours) {
+				pressWaiting = row;
+				MainThread::Post([] { MPMenu::Close(); });
+			}
+		}
+
 		// Inside the menu's update: our entry after Load, once per list the menu builds.
 		void Apply(Hooked& a_hooked, RE::IMenu* a_menu)
 		{
@@ -158,6 +249,17 @@ namespace MainMenuEntry
 			for (std::uint32_t i = 0; i < count; ++i) {
 				read[i].text = texts[i];
 			}
+			// While the multiplayer menu is open, our row looks as the game's own does with its submenu open: a list whose
+			// entries find the focus elsewhere draws the chosen one's square at half strength (BSScrollingListFadeEntry).
+			if (const bool dim = MPMenu::Showing(); dim != a_hooked.dimmed) {
+				GValue stage;
+				if (list.GetMember("stage", &stage) && stage.IsObject()) {
+					a_hooked.dimmed = dim;
+					stage.SetMember("focus", dim ? GValue(nullptr) : list);
+					list.Invoke("UpdateList");
+				}
+			}
+			PassMouse(movie, list, read);
 			const auto at = MainMenuPlace::InsertAt(read);
 			if (!at) {
 				return;
@@ -201,6 +303,15 @@ namespace MainMenuEntry
 			a_hooked.original = *reinterpret_cast<AdvanceFn*>(slot);
 			REL::WriteSafeData(slot, reinterpret_cast<std::uintptr_t>(a_advance));
 			REX::INFO("MainMenuEntry: hooked the {}'s update (vtable {:X})", a_hooked.menu, a_vtable);
+		}
+	}
+
+	void PanelMouse(float a_x, float a_y, bool a_click)
+	{
+		std::scoped_lock l{ mouseLock };
+		// A click isn't lost to the move after it in the same update.
+		if (!passedMouse || !passedMouse->click) {
+			passedMouse = PassedMouse{ a_x, a_y, a_click };
 		}
 	}
 

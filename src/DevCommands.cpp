@@ -36,6 +36,7 @@
 #include "game/FrameStats.h"
 #include "game/GpuWatch.h"
 #include "game/DevHud.h"
+#include "game/TalkHud.h"
 #include "game/Perf.h"
 #include "game/GraphInfo.h"
 #include "game/Hotkeys.h"
@@ -3231,6 +3232,14 @@ namespace DevCommands
 				MainMenuEntry::OpenPanel();
 				return "opened";
 			}
+			if (args.size() >= 3 && args[0] == "mouse") {
+				float x = 0.0f;
+				float y = 0.0f;
+				std::from_chars(args[1].data(), args[1].data() + args[1].size(), x);
+				std::from_chars(args[2].data(), args[2].data() + args[2].size(), y);
+				MainMenuEntry::PanelMouse(x, y, args.size() > 3 && args[3] == "click");
+				return "passed";
+			}
 			if (args.size() == 2 && args[0] == "press") {
 				int index = -1;
 				std::from_chars(args[1].data(), args[1].data() + args[1].size(), index);
@@ -4096,6 +4105,11 @@ namespace DevCommands
 			return "error: saveguard [strays | rtti <offset> | exclude <ref> | poison <ref> <name>]";
 		}
 
+		std::string TalkHudState(std::string_view)
+		{
+			return TalkHud::Describe();
+		}
+
 		// devhud [on|off]: the developer HUD's state, turned on or off for this run if asked (the ini is left alone).
 		std::string DevHudState(std::string_view a_args)
 		{
@@ -4114,6 +4128,7 @@ namespace DevCommands
 		constexpr std::array COMMANDS{
 			Entry{ "status", Status },
 			Entry{ "devhud", DevHudState },
+			Entry{ "talkhud", TalkHudState },
 			Entry{ "frames", Frames },
 			Entry{ "perf", PerfStats },
 			Entry{ "stall", Stall },

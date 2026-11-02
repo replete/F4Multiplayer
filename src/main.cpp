@@ -4,6 +4,7 @@
 #include "game/MainMenuEntry.h"
 #include "game/MPMenu.h"
 #include "game/DevHud.h"
+#include "game/TalkHud.h"
 #include "game/AutoSave.h"
 #include "game/Equipment.h"
 #include "game/Downed.h"
@@ -467,6 +468,7 @@ namespace
 			}
 			MPMenu::Register();  // the multiplayer menu of our own, before the main menu can open it
 			DevHud::Register();
+			TalkHud::Register();
 			Hud::Install();  // the loading screen watcher, for the frame and the hang watch too
 			ExitMusic::Install();  // quitting crashed in the cells' music check after the region state was gone
 			// Quitting ended the server thread without its last save (up to 15 s of kills and loot lost each time).
@@ -687,6 +689,7 @@ namespace
 			if (a_onMain) {
 				PERF_SCOPE("DevHud");
 				DevHud::Frame();
+				TalkHud::Frame();
 			}
 			{
 				PERF_SCOPE("RealTime");

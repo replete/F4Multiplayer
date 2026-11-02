@@ -1,0 +1,7 @@
+# The sources TalkHud.swf was built from (tools/flash/build.sh), each with the SHA-256 of its text with LF line endings.
+e777174540f71899d66e612262faed30f5c6bc3dedc384a545e6460bf4da7314  TalkHud/TalkHud.as
+3b9972a5a9496222ab3b7e43b4fd534098cfa13ca36bdf64c7ff4471244134b3  shared/f4mp/ui/BackHint.as
+16648d65ba737371bc7227b2a7b91f808fcf9e47c9eb41dcd943cc8e40d1c343  shared/f4mp/ui/Brackets.as
+eea299a000222d863cef46a32656869fbc030c1ea64cdfcfee3ebf1bddc6cd3f  shared/f4mp/ui/EntryList.as
+b62fc3f4c8610dfe6a9c434164a7f8162bc77a9e788dd2cba9154ac89df1c897  shared/f4mp/ui/ScrollBar.as
+767e22db90c673c8cf48c2bf85d1535d9568617123b91b8230868c4a829167a2  shared/f4mp/ui/Style.as

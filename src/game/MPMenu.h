@@ -19,6 +19,9 @@ namespace MPMenu
 	// a_heading: the mod's name and version over the text.
 	void SetPage(std::uint32_t a_serial, std::string a_body, std::vector<std::string> a_rows, std::vector<std::string> a_hints, bool a_keepRow, bool a_heading);
 
+	// Main thread. Only the shown page's status line changes, so its rows are left alone. A page asked for since wins.
+	void SetStatus(std::string a_text);
+
 	// Main thread. On: the next key or mouse button goes to Menu::PanelKey, not to the menu. A gamepad's still work the menu.
 	void CaptureKey(bool a_on);
 

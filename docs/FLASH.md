@@ -24,6 +24,7 @@ function, `Show(body, buttons)`. That function gets a second output, the Flash p
   objects are written only in a menu's own update). A press carries the page's serial, so a stale one is dropped.
 - Esc, Tab and the gamepad's B go back a page. The main page redraws when its status changes.
 - `Menu::Press` and `Describe` work on the panel too, so the rig scripts it and reads the log, without screenshots.
+- While the panel is open, the Multiplayer row under it dims as the game's own do with a submenu open.
 - The message box stays as the fallback if the movie doesn't load. F1 opens the panel once it has been proven on
   Windows and with a gamepad.
 
@@ -32,6 +33,12 @@ function, `Show(body, buttons)`. That function gets a second output, the Flash p
 `bDeveloperHud`, and a row in the menu's settings: live numbers in the top right corner while a game is loaded, for testing and bug reports. `ui/DevHud` and `src/game/DevHud.cpp` are the second movie: a menu of the game's UI that doesn't pause, take input or show a cursor. The main thread gathers the text four times a second and the menu writes it in its own update. It is drawn in the HUD color it is told, not through the game's renderer. Addresses are masked and players are `player N`, as it goes into screenshots. `devhud [on|off]` on the dev channel reads it, and turns it on or off for the run.
 
 So far: the link and why it isn't up yet, ping, players and how far away, frame rate and times, the mod's cost, and where you are. The dev channel's counters could follow.
+
+## Push-to-talk HUD
+
+`bTalkHud`, on by default. `ui/TalkHud` and `src/game/TalkHud.cpp`: while the player transmits, a microphone at about (907, 658) on the 1280x720 stage, between the crit meter and the fatigue head. Its inner bracket lights with speech and its outer one when loud; the microphone itself stays solid. Hosting with nobody there yet, the talk key still records and meters, sending nothing, so the icon can be tried alone. The level comes from decoding our own voice pieces (`VoiceLevel.h`). Its thresholds are guesses until set from real values: the log has each press's level. Friends who are talking could follow.
+
+**Voice**, on the main page of the panel: voice chat, open mic, the talk icon, voice volume, range, the output device, and a mic test that plays you back and shows your level, sending nothing to anyone. The mic itself is chosen in Steam's settings: its voice calls take no device.
 
 ## Main menu → Multiplayer
 
