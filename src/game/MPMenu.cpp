@@ -62,7 +62,7 @@ namespace MPMenu
 
 		// The player's HUD color (Settings > Display), which the main menu is drawn in: the game's own menus are white in
 		// their movies and tinted by the renderer, which a menu of ours drawn flat is not, so the movie is told the color.
-		std::uint32_t HudColor()
+		std::uint32_t ReadHudColor()
 		{
 			constexpr std::uint32_t DEFAULT = 0x12FF15;  // the game's own default
 			const auto prefs = RE::INIPrefSettingCollection::GetSingleton();
@@ -274,7 +274,7 @@ namespace MPMenu
 				const auto back = Text::Get("mpmenu.back");
 				const std::array<GValue, 8> args{ GValue(static_cast<double>(boxLeft.load())), GValue(static_cast<double>(boxTop.load())),
 					GValue(static_cast<double>(boxRight.load())), GValue(static_cast<double>(boxBottom.load())),
-					GValue(static_cast<double>(HudColor())), GValue("F4Multiplayer"), GValue(version.c_str()), GValue(back.c_str()) };
+					GValue(static_cast<double>(ReadHudColor())), GValue("F4Multiplayer"), GValue(version.c_str()), GValue(back.c_str()) };
 				if (!menuObj.Invoke("SetLook", nullptr, args.data(), args.size())) {
 					REX::WARN("MPMenu: the movie has no SetLook");
 				}
@@ -340,6 +340,11 @@ namespace MPMenu
 		} else {
 			hideWaiting = true;
 		}
+	}
+
+	std::uint32_t HudColor()
+	{
+		return ReadHudColor();
 	}
 
 	bool Showing()

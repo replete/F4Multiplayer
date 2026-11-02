@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // The multiplayer menu of our own: a menu of the game's UI (F4MPMenu) with a movie of ours (Interface/F4Multiplayer/MPMenu.swf,
 // built from ui/MPMenu by tools/flash/build.sh), opened over the main or pause menu by its Multiplayer entry
 // (MainMenuEntry) and lined up beside the main menu's list. Its input is its own while it is open: the main menu
@@ -22,6 +24,9 @@ namespace MPMenu
 
 	// Main thread.
 	void Close();
+
+	// The player's HUD color (Settings > Display), 0xRRGGBB. Main thread.
+	[[nodiscard]] std::uint32_t HudColor();
 
 	// Opened and not closed since, by us or by the game. Any thread.
 	[[nodiscard]] bool Showing();
