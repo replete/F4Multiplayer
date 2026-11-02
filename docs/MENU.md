@@ -115,7 +115,7 @@ been asked for, so pressing *Join a friend* (or *Look again*) first asks for eve
 Pressing a name joins their lobby, and the join carries on as an accepted invite would (you see
 "joining your friend's game", then "connected"). If `sServerAddress` is set, `Join <address>`
 connects to it directly (the UDP/LAN case). With nobody to list, the page says how many friends
-Steam sees, how many are online and how many are in Fallout 4, so you can tell where the list
+are online and how many are in Fallout 4, so you can tell where the list
 stops.
 
 A host appears on this page only if the joiner's Steam shows them as playing Fallout 4: Steam

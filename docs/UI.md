@@ -2,8 +2,8 @@
 
 How the Multiplayer entry in the game's main menu and the menu it opens are built, the toolchain for the plugin's own
 Flash movies, and what was learned about the game's menus on the way. For the F1 message-box menu see
-[MENU.md](MENU.md). Status: a first version. The entry and the panel work at the main menu (seen in one game under
-CrossOver); each panel entry still opens the F1 pages; not yet tried in the pause menu, with a gamepad or on Windows.
+[MENU.md](MENU.md). Status: the panel shows the F1 menu's pages, plus Controls and About, in the main and pause menus (seen in
+one game under CrossOver). What is still to check, and the plan, are in [FLASH.md](FLASH.md).
 
 ## The pieces
 
@@ -12,7 +12,7 @@ CrossOver); each panel entry still opens the F1 pages; not yet tried in the paus
 | The MULTIPLAYER entry in the main and pause menus, after LOAD | [src/game/MainMenuEntry.cpp](../src/game/MainMenuEntry.cpp), placement rule in [MainMenuPlace.h](../src/game/MainMenuPlace.h) (unit tested) |
 | Our menu (F4MPMenu in the game's UI), opened by the entry | [src/game/MPMenu.cpp](../src/game/MPMenu.cpp) |
 | Its movie, `Interface/F4Multiplayer/MPMenu.swf` | [ui/MPMenu/MPMenu.as](../ui/MPMenu/MPMenu.as), built and committed beside it with `MPMenu.sources` |
-| Pieces for other movies: look, brackets, back hint, entry list | [ui/shared/f4mp/ui/](../ui/shared/f4mp/ui/) (`Style`, `Brackets`, `BackHint`, `EntryList`) |
+| Pieces for other movies: look, brackets, back hint, entry list | [ui/shared/f4mp/ui/](../ui/shared/f4mp/ui/) (`Style`, `Brackets`, `BackHint`, `EntryList`, `ScrollBar`) |
 | The compiler, pinned | [tools/flash/fetch.sh](../tools/flash/fetch.sh) |
 | Building the movies | [tools/flash/build.sh](../tools/flash/build.sh), [build.ps1](../tools/flash/build.ps1) |
 | The guard that the committed movies match their sources | [tests/UiMoviesTests.cpp](../tests/UiMoviesTests.cpp) |
@@ -66,9 +66,6 @@ controller glyphs). Keep what you extract out of the repo: the game's files are 
 At run time:
 
 - The dev channel's `gfx <menu> <path> [depth]` logs a menu's display objects, `gfxset` sets a property.
-- `MainMenuEntry` logs, once per launch, the main menu's layout (place, size, alpha, color transform, text font and
-  size, three levels down) and how it renders (renderer, flags, every shader target). Search the log for
-  `MainMenuEntry: layout` and `shader target`. Drop these logs once the look is settled.
 
 ## The game's main menu (MainMenu.swf, 1.11.240)
 
@@ -112,15 +109,24 @@ At run time:
 - **Keyboard or gamepad.** `IMenu::RefreshPlatform` calls the movie's `SetPlatform(platform, psn)`; 0 is the keyboard
   and mouse. Call it again after setting the code object if the movie answers through it.
 - **The look.** The HUD color from the game's `iHUDColorR/G/B:Interface` settings; the game's `$MAIN_Font`; the hard
-  shadow (black, no blur, equal down and right); brackets as one-pixel lines on the pixel's middle (else they blur to
-  two pixels and their shadow grows). Controller glyphs are letters in the game's `$Controller_buttons` font:
+  shadow (black, no blur, equal down and right); panel brackets as two-pixel lines (one looks too thin through the renderer). Controller glyphs are letters in the game's `$Controller_buttons` font:
   `Shared.AS3.BSButtonHint`'s `NameToTextMap` gives Xenon_A "A", Xenon_B "B", Xenon_X "C", Xenon_Y "D",
   Xenon_Select "E", Xenon_LS "F", Xenon_L1 "G", Xenon_L3 "H", Xenon_L2 "I", … Xenon_Start "O" (PlayStation has a map of
   its own, not read yet).
-- **The game's tint, tried.** With `kCustomRendering` (through `FlatScreenModel`) and `BSGFxShaderFXTarget`s on the
-  movie's layers set as the main menu's (above), the content takes the player's color exactly, but our translucent
-  ground came out opaque, and `EnableShadedBackground` on a layer of ours drew nothing (white; black with the no-color
-  filter). `SHADED` in MPMenu.cpp keeps that path, off. The movie draws in the HUD color itself.
+- **Drawing through the game's renderer.** Set `kCustomRendering` (the renderer is `GameMenuBase`'s `FlatScreenModel`). The game's
+  menus, cursor and message boxes all draw that way, and a menu that doesn't draws in a later pass, over all of them. What follows is what
+  was seen under CrossOver, not how the renderer is known to work: ours drew only where its `shaderFXObjects` (`BSGFxShaderFXTarget`s)
+  gave a quad, though the main menu draws far more than its few cached quads, so there is more to it:
+  - With no target, or one with no filter (it makes no quad), a sliver of the movie shows. A target on the movie's root has an empty
+    quad. So the targets go on objects with a size: `Content_mc` and `Hint_mc`. (F4SE's `CustomMenu` shows where to look: its
+    `filterHolder`, a target on the root.)
+  - A target needs a filter to make a quad. The no-color one (`kNoColorMultiplier`) draws the movie's colors black; a white one
+    (`CreateAndSetFiltersToColor(255, 255, 255, 1)`) leaves them as they are.
+  - The panel's see-through ground is the renderer's, not the movie's: anything the movie draws there comes out opaque. So
+    `Background_mc` has a nearly invisible shape, for its size, and a target as the main menu's backgrounds: no-color, with
+    `EnableShadedBackground(kGameplayHUDColor)`.
+  - The content keeps the HUD color the movie is told. The player's exact color would be `kPlayerSetColor` with white in the movie (not
+    in use).
 - **Threads.** Flash objects are written only inside a menu's own update (`AdvanceMovie`, hooked in its vtable for
   the main and pause menus, as the compass does for the HUD) or by the menu's own movie; anything that touches the
   game goes to the main thread (`MainThread::Post`).
@@ -132,13 +138,10 @@ At run time:
 - The log privacy test refuses a log line that formats anything ending in `.name`.
 - A display object's `x`, `y` are its parent's; the game's panels are drawn at offsets inside `Menu_mc`, itself placed
   to the safe area. Use `getBounds(root)` for where something is on the stage.
+- A display object's `mask` failed on the first page drawn (no clipping, and a block of its own) and clipped only after
+  the first input (seen under CrossOver; cause not known). The list shows only the rows that fit instead.
 - `GetVariable` paths use instance names; objects made at run time get them from `.name`.
 
 ## Next
 
-- Pause menu: check the entry and the panel there (Esc closes the pause menu's own way).
-- What the entries do: Host (choose Continue, Load or New, then host on load), Join (friends hosting, then a save),
-  Direct connect (a text field), Options. With them, hosting by the menu for this launch only, instead of `bHost`.
-- The PlayStation glyphs; the hint following a device change while the menu is open.
-- Inserting into the main menu instead, with its real panels, list and hint bar: possible (MCM does as much in the
-  pause menu), at the cost of sharing its state machine and input. Kept in mind; the current menu is its fallback.
+The plan is in [FLASH.md](FLASH.md). Also: the PlayStation glyphs, and the hint following a device change while the menu is open.
