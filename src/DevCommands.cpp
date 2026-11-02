@@ -1327,6 +1327,9 @@ namespace DevCommands
 		// reference, what it was taken for and the scripts bound to it now.
 		std::string TrapsList(std::string_view a_args)
 		{
+			if (a_args == "probe on" || a_args == "probe off") {
+				return Traps::Probe(a_args == "probe on");
+			}
 			if (!a_args.empty()) {
 				const auto id = ParseHex(a_args);
 				return id ? Traps::Why(*id) : "error: usage: traps [refHex]";
@@ -1836,6 +1839,93 @@ namespace DevCommands
 			return std::format("{:08X} 3d={} script={} state={} isOpen={} isAnimating={} doOnce={} setDefault={}", ref->GetFormID(), ref->Get3D() != nullptr,
 				type ? type->GetName() : "?", object->currentState.c_str() ? object->currentState.c_str() : "", flag("isOpen"), flag("isAnimating"), flag("doOnce"),
 				flag("shouldSetDefaultState"));
+		}
+
+		// scriptvars <refHex> <Script> <property...>: a script's state and the named properties' values (an object's form id,
+		// an array's length), read without calling into the VM.
+		std::string ScriptVars(std::string_view a_args)
+		{
+			const auto args = SplitArgs(a_args);
+			const auto ref = args.empty() ? nullptr : LookupRef(args[0]);
+			if (!ref || args.size() < 2) {
+				return "error: usage: scriptvars <refHex> <Script> <property...>";
+			}
+			// The bound script of that name, found as `scripts` lists them (FindBoundObject misses some, workshop scripts among them).
+			const auto game = RE::GameVM::GetSingleton();
+			const auto vm = game ? game->GetVM() : nullptr;
+			if (!vm) {
+				return "error: no VM";
+			}
+			const auto& handles = vm->GetObjectHandlePolicy();
+			const auto  handle = handles.GetHandleForObject(RE::BSScript::GetVMTypeID<RE::TESObjectREFR>(), ref);
+			const auto  lower = [](std::string_view a_text) {
+				std::string text{ a_text };
+				std::ranges::transform(text, text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+				return text;
+			};
+			const auto                 wanted = lower(args[1]);
+			RE::BSScript::Object*      object = nullptr;
+			const RE::BSTThreadScrapFunction<RE::BSContainer::ForEachResult(RE::BSScript::Object*)> visit{ [&](RE::BSScript::Object* a_object) {
+				const auto  type = a_object ? a_object->type.get() : nullptr;
+				const char* name = type ? type->GetName() : nullptr;
+				if (name && lower(name) == wanted) {
+					object = a_object;
+				}
+				return Papyrus::BOUND_NEXT;
+			} };
+			if (handle != handles.EmptyHandle()) {
+				vm->ForEachBoundObject(handle, visit);
+			}
+			if (!object) {
+				return std::format("{:08X} no {} object", ref->GetFormID(), args[1]);
+			}
+			std::string out = std::format("{:08X} {} state='{}'", ref->GetFormID(), args[1], object->currentState.c_str() ? object->currentState.c_str() : "");
+			for (std::size_t i = 2; i < args.size(); ++i) {
+				const RE::BSScript::Variable* var = object->GetProperty(RE::BSFixedString{ args[i] });
+				if (!var) {
+					// A script variable (a property with its own getter keeps its value in "::<name>_var"): the object's variables
+					// hold its parents' first, the oldest parent's at the front.
+					std::vector<const RE::BSScript::ObjectTypeInfo*> chain;
+					for (auto cls = object->type.get(); cls; cls = cls->GetParent()) {
+						chain.insert(chain.begin(), cls);
+					}
+					const auto    mangled = lower(std::format("::{}_var", args[i]));
+					const auto    plain = lower(args[i]);
+					std::uint32_t offset = 0;
+					for (const auto cls : chain) {
+						const auto infos = cls->GetVariableIter();
+						for (std::uint32_t v = 0; infos && v < cls->GetNumVariables() && !var; ++v) {
+							const auto name = lower(infos[v].name.c_str() ? infos[v].name.c_str() : "");
+							if (name == mangled || name == plain) {
+								var = std::addressof(object->variables[offset + v]);
+							}
+						}
+						offset += cls->GetNumVariables();
+					}
+				}
+				std::string value = "?";
+				if (!var) {
+					value = "(none)";
+				} else if (var->is<std::nullptr_t>()) {
+					value = "None";
+				} else if (var->is<bool>()) {
+					value = RE::BSScript::get<bool>(*var) ? "true" : "false";
+				} else if (var->is<std::int32_t>()) {
+					value = std::to_string(RE::BSScript::get<std::int32_t>(*var));
+				} else if (var->is<float>()) {
+					value = std::format("{:.2f}", RE::BSScript::get<float>(*var));
+				} else if (var->is<RE::BSFixedString>()) {
+					value = std::format("'{}'", RE::BSScript::get<RE::BSFixedString>(*var).c_str());
+				} else if (var->is<RE::BSScript::Object>()) {
+					const auto held = RE::BSScript::get<RE::BSScript::Object>(*var);
+					value = held ? std::format("{:08X}", static_cast<std::uint32_t>(held->GetHandle())) : "None";
+				} else if (var->is<RE::BSScript::Array>()) {
+					const auto array = RE::BSScript::get<RE::BSScript::Array>(*var);
+					value = array ? std::format("[{}]", array->size()) : "None";
+				}
+				out += std::format(" {}={}", args[i], value);
+			}
+			return out;
 		}
 
 		// setpos <refHex> <x> <y> <z> [rz degrees]
@@ -2837,6 +2927,99 @@ namespace DevCommands
 			}
 			const bool played = handle.Play();
 			return std::format("handle={:X} played={}", handle.soundID, played);
+		}
+
+		// One sound as SnapshotSounds copied it: plain data, read under SEH.
+		struct SoundRow
+		{
+			std::uint32_t                id = 0;
+			bool                         follows = false;
+			char                         node[64]{};
+			std::uint32_t                chain = 0;          // how many of the followed node's parents were read
+			std::array<std::uintptr_t, 8> userData{};        // each one's user data, the followed node first
+			std::array<std::uint32_t, 8>  formId{};          // the form ID that user data's head holds (TESForm::formID)
+		};
+
+		// Copies up to a_max sounds of the audio manager, while its thread runs: a list it changes meanwhile, or a node it
+		// frees, faults here and ends the copy (what was copied stays), instead of the game. Plain data only (SEH): forms
+		// are looked up by the caller, outside it.
+		std::size_t SnapshotSounds(RE::BSAudioManager* a_audio, SoundRow* a_rows, std::size_t a_max, bool* a_more)
+		{
+			std::size_t count = 0;
+			__try {
+				for (const auto& [id, sound] : a_audio->soundMap) {
+					if (count == a_max) {
+						*a_more = true;
+						break;
+					}
+					auto& row = a_rows[count++];
+					row.id = id;
+					const auto follow = a_audio->movingRefrMap.find(id);
+					if (follow == a_audio->movingRefrMap.end() || !follow->second) {
+						continue;
+					}
+					const RE::NiAVObject* node = follow->second.get();
+					row.follows = true;
+					if (const auto name = node->name.c_str()) {
+						strncpy_s(row.node, name, _TRUNCATE);
+					}
+					for (auto at = node; at && row.chain < row.userData.size(); at = at->parent) {
+						const auto data = at->userData;
+						row.userData[row.chain] = data;
+						if (data) {
+							std::uintptr_t head[3];
+							std::memcpy(head, reinterpret_cast<const void*>(data), sizeof(head));
+							row.formId[row.chain] = static_cast<std::uint32_t>(head[2] >> 32);
+						}
+						++row.chain;
+					}
+				}
+			} __except (1) {  // EXCEPTION_EXECUTE_HANDLER
+				*a_more = true;
+			}
+			return count;
+		}
+
+		// sounds: every sound the audio manager holds (its handle ID), the reference whose 3D it follows, if any, and that
+		// reference's distance from the player. One that follows the player is marked PLAYER: it is heard wherever the player
+		// goes. Which sound each one is isn't read (the engine's BSGameSound is not mapped; its first 0x180 bytes hold no
+		// pointer to its descriptor). Copied while the audio thread runs (SnapshotSounds), so a dev probe only: a node
+		// freed meanwhile can print a wrong name.
+		std::string Sounds(std::string_view)
+		{
+			const auto audio = RE::BSAudioManager::GetSingleton();
+			const auto player = RE::PlayerCharacter::GetSingleton();
+			if (!audio || !player) {
+				return "error: no audio manager";
+			}
+			std::array<SoundRow, 64> rows{};
+			bool                     more = false;
+			const auto               count = SnapshotSounds(audio, rows.data(), rows.size(), &more);
+			std::string out = std::format("sounds={} following={}", audio->soundMap.size(), audio->movingRefrMap.size());
+			for (std::size_t i = 0; i < count; ++i) {
+				const auto& row = rows[i];
+				out += std::format(" | {:X}", row.id);
+				if (!row.follows) {
+					continue;
+				}
+				// The user data of a reference's 3D root is the reference: taken only if it is a form the game knows by
+				// the ID its head holds.
+				RE::TESObjectREFR* ref = nullptr;
+				for (std::uint32_t at = 0; at < row.chain && !ref; ++at) {
+					const auto form = row.userData[at] ? RE::TESForm::GetFormByID(row.formId[at]) : nullptr;
+					if (form && reinterpret_cast<std::uintptr_t>(form) == row.userData[at]) {
+						ref = form->As<RE::TESObjectREFR>();
+					}
+				}
+				out += std::format(" follows {}", row.node[0] ? row.node : "?");
+				if (ref) {
+					out += std::format(" of {:08X}{} at {:.0f}", ref->GetFormID(), ref == player ? " PLAYER" : "", ref->data.location.GetDistance(player->data.location));
+				}
+			}
+			if (more) {
+				out += " ...";
+			}
+			return out;
 		}
 
 		// gs <text>: game settings whose name contains the text (case-sensitive), with their values.
@@ -3966,6 +4149,7 @@ namespace DevCommands
 			Entry{ "findgear", FindGear },
 			Entry{ "refinfo", RefInfo },
 			Entry{ "gate", Gate },
+			Entry{ "scriptvars", ScriptVars },
 			Entry{ "scripts", ScriptsCommand },
 			Entry{ "setpos", SetPos },
 			Entry{ "puppet", Puppet },
@@ -4010,6 +4194,7 @@ namespace DevCommands
 			Entry{ "proj", Proj },
 			Entry{ "muzzle", Muzzle },
 			Entry{ "playsound", PlaySoundCmd },
+			Entry{ "sounds", Sounds },
 			Entry{ "gs", GameSettings },
 			Entry{ "graph", Graph },
 			Entry{ "anim", Anim },
