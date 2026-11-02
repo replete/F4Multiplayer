@@ -142,6 +142,8 @@ New-Item -ItemType Directory -Force $lang | Out-Null
 $langFiles = @(Get-ChildItem (Join-Path $root 'dist\lang') -Filter '*.txt' -File)
 if (-not ($langFiles | Where-Object { $_.Name -eq 'en.txt' })) { throw 'dist\lang has no en.txt' }
 Copy-Item $langFiles.FullName $lang
+# The multiplayer menu's About page (Menu.cpp).
+Copy-Item (Join-Path $root 'dist\about.txt') (Join-Path $stage 'F4SE\Plugins\F4Multiplayer')
 # The plugin's own menu movies (docs/UI.md), committed in ui\<Name>\ (F4MPTests checks they match their sources), where
 # the game looks for menus: Data\Interface, in a folder of ours.
 $movies = @(Get-ChildItem (Join-Path $root 'ui') -Directory | ForEach-Object { Get-ChildItem $_.FullName -Filter '*.swf' -File })
