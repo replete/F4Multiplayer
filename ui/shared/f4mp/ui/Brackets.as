@@ -2,14 +2,17 @@ package f4mp.ui
 {
 	import flash.display.Shape;
 
-	// The game's bracket frames: one-pixel lines on the pixel's middle (so they stay one pixel and their shadow matches the
-	// text's), drawn inside the box they frame, with the hard shadow.
+	// The game's bracket frames, drawn inside the box they frame, with the hard shadow: panels' lines thicker than a pixel, as
+	// one pixel looks too thin through the game's renderer, and a button hint's one pixel, on the pixel's middle.
 	public final class Brackets
 	{
+		public static const THICK:Number = 1.5;
+		private static const FAINT:Number = 0.45;  // what scrolls
+
 		// Along the top and the bottom, each with its ends turned in: a panel's frame.
 		public static function Panel(a_width:Number, a_height:Number, a_tick:Number, a_color:uint, a_scale:Number):Shape
 		{
-			var half:Number = 0.5;
+			var half:Number = THICK / 2;
 			var tick:Number = Math.round(a_tick);
 			var shape:Shape = Line(a_color);
 			shape.graphics.moveTo(half, half + tick);
@@ -21,6 +24,23 @@ package f4mp.ui
 			shape.graphics.lineTo(a_width - half, a_height - half);
 			shape.graphics.lineTo(a_width - half, a_height - half - tick);
 			shape.filters = [ Style.Shadow(a_scale) ];
+			return shape;
+		}
+
+		// What scrolls: as a panel's frame, faint, with its right side one whole line: the scrollbar's (ScrollBar).
+		public static function Scrolling(a_width:Number, a_height:Number, a_tick:Number, a_color:uint, a_scale:Number):Shape
+		{
+			var half:Number = THICK / 2;
+			var tick:Number = Math.round(a_tick);
+			var shape:Shape = Line(a_color);
+			shape.graphics.moveTo(half, half + tick);
+			shape.graphics.lineTo(half, half);
+			shape.graphics.lineTo(a_width - half, half);
+			shape.graphics.lineTo(a_width - half, a_height - half);
+			shape.graphics.lineTo(half, a_height - half);
+			shape.graphics.lineTo(half, a_height - half - tick);
+			shape.filters = [ Style.Shadow(a_scale) ];
+			shape.alpha = FAINT;
 			return shape;
 		}
 
@@ -49,7 +69,7 @@ package f4mp.ui
 		private static function Line(a_color:uint):Shape
 		{
 			var shape:Shape = new Shape();
-			shape.graphics.lineStyle(1, a_color, 1, true, "normal", "none", "miter");
+			shape.graphics.lineStyle(THICK, a_color, 1, true, "normal", "none", "miter");
 			return shape;
 		}
 	}

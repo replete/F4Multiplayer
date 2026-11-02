@@ -20,11 +20,15 @@ package f4mp.ui
 		// The game's menu movies are 1280x720, shown whole; ours are made the same (tools/flash/build.sh).
 		public static const STAGE_W:Number = 1280;
 		public static const STAGE_H:Number = 720;
+		private static const SHADOW_ALPHA:Number = 0.4;
+		private static const SHADOW_SHARE:Number = 0.6;  // of the scale, down and right
+		private static const SHADOW_LEAST:Number = 0.3;
 
-		// The game's hard shadow: down and right by the same amount, no blur, black.
+		// The game's hard shadow: down and right by the same amount, no blur, black. Through the game's renderer a whole pixel
+		// and full black look harsher than its own text, so less of both.
 		public static function Shadow(a_scale:Number):DropShadowFilter
 		{
-			return new DropShadowFilter(Math.max(1, Math.round(2 * a_scale)), 45, BLACK, 1, 0, 0, 1, 1);
+			return new DropShadowFilter(Math.max(SHADOW_LEAST, a_scale * SHADOW_SHARE), 45, BLACK, SHADOW_ALPHA, 0, 0, 1, 1);
 		}
 
 		public static function Text(a_text:String, a_size:Number, a_color:uint, a_scale:Number, a_font:String = FONT):TextField
@@ -37,6 +41,17 @@ package f4mp.ui
 			text.defaultTextFormat = new TextFormat(a_font, a_size, a_color);
 			text.text = a_text;
 			text.filters = [ Shadow(a_scale) ];
+			return text;
+		}
+
+		// Text wrapped to a width, as tall as it needs.
+		public static function Wrapped(a_text:String, a_width:Number, a_size:Number, a_color:uint, a_scale:Number):TextField
+		{
+			var text:TextField = Text("", a_size, a_color, a_scale);
+			text.multiline = true;
+			text.wordWrap = true;
+			text.width = a_width;
+			text.text = a_text;
 			return text;
 		}
 
