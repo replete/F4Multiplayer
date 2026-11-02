@@ -2,6 +2,7 @@
 
 #include "MainThread.h"
 #include "Text.h"
+#include "game/Hud.h"
 #include "game/KeyNames.h"
 #include "game/Menu.h"
 
@@ -51,6 +52,7 @@ namespace MPMenu
 		std::atomic<bool>          wanted{ false };
 		std::atomic<std::uint32_t> opened{ 0 };
 		std::atomic<bool>          capturing{ false };  // the next key is a keybind's
+		std::atomic<bool>          hideWaiting{ false };  // closed while the UI was held: hidden once it has settled
 
 		// The main menu's panel box on the stage: set on the main thread before the show message, read as the menu is made.
 		std::atomic<float> boxLeft{ 0.0f };
@@ -177,7 +179,11 @@ namespace MPMenu
 			// Flash objects are written only here, in the menu's own update.
 			void AdvanceMovie(float a_timeDelta, std::uint64_t a_time) override
 			{
-				if (uiMovie) {
+				// Nothing written while the UI is held (UiHold.h): the engine may be releasing the movie. The page waits.
+				if (uiMovie && Hud::IsSettled()) {
+					if (hideWaiting.exchange(false)) {
+						Hide();
+					}
 					DrawPage();
 				}
 				GameMenuBase::AdvanceMovie(a_timeDelta, a_time);
@@ -294,6 +300,9 @@ namespace MPMenu
 	void Open(float a_left, float a_top, float a_right, float a_bottom)
 	{
 		MainThread::Assert("MPMenu::Open");
+		if (!Hud::IsSettled()) {
+			return;  // the entry's press came as the UI went down: pressed again once it is back
+		}
 		boxLeft = a_left;
 		boxTop = a_top;
 		boxRight = a_right;
@@ -304,6 +313,7 @@ namespace MPMenu
 		}
 		++opened;
 		wanted = true;
+		hideWaiting = false;
 		if (const auto queue = RE::UIMessageQueue::GetSingleton()) {
 			queue->AddMessage(NAME, RE::UI_MESSAGE_TYPE::kShow);
 		}
@@ -325,7 +335,11 @@ namespace MPMenu
 	{
 		capturing = false;
 		wanted = false;
-		Hide();
+		if (Hud::IsSettled()) {
+			Hide();
+		} else {
+			hideWaiting = true;
+		}
 	}
 
 	bool Showing()
