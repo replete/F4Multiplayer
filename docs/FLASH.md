@@ -145,11 +145,12 @@ ini's address cover the gap.
 
 ## Still to check
 
-Seen only in one game under CrossOver on a Mac, at the main and pause menus:
+Seen only under CrossOver on a Mac: the main and pause menus, and two games in a session over a direct connection (joining, and seeing each other):
 
 - **Windows, by someone with it:** the panel through the game's renderer (it draws, the cursor and popups are over it, and its
   ground is see-through), Controls, and the `build.ps1`, `package.ps1` and `deploy.ps1` changes.
-- **A session:** hosting and joined pages in the pause menu, the main page's live status, host controls, a Steam invite.
+- **The rest of a session:** hosting and joined pages in the pause menu, the main page's live status, host controls, hosting
+  from the menu's own row, and joining over Steam with an invite.
 - **A gamepad, and MCM installed.**
 - **Mouse side buttons in Controls:** their codes in the game's input are a guess; the log says what it heard.
 - **Translations:** the menu's new texts are machine-written.
